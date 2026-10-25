@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>试卷资料共享站</title>
+<style>
+*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;background:#f5f6f8;color:#222}
+header{background:#1a73e8;color:#fff;padding:14px 20px;display:flex;justify-content:space-between;align-items:center}
+header h1{margin:0;font-size:20px}
+main{max-width:900px;margin:20px auto;padding:0 14px}
+.card{background:#fff;border-radius:10px;padding:16px;margin-bottom:14px;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+button{background:#1a73e8;color:#fff;border:0;border-radius:6px;padding:7px 14px;cursor:pointer}
+button.gray{background:#888}button:disabled{opacity:.5}
+input,select,textarea{padding:7px;border:1px solid #ccc;border-radius:6px;width:100%;margin:4px 0}
+label{font-size:13px;color:#555}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:7px;border-bottom:1px solid #eee;text-align:left}
+.err{color:#c00}.ok{color:#080}
+.caps{display:flex;gap:8px}.caps div{flex:1}
+.msg{font-size:13px;margin-top:6px}
+dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:14px}
+dt{color:#666}dd{margin:0}
+</style>
+</head>
+<body>
+<header><h1 id="siteName">试卷资料共享站</h1>
+<nav id="nav"></nav></header>
+<main>
+<div id="authBox" class="card">
+  <div style="display:flex;gap:20px">
+    <div style="flex:1"><h3>登录</h3>
+      <input id="li_name" placeholder="用户名"><input id="li_pass" type="password" placeholder="密码">
+      <div class="caps"><div><label id="li_q0"></label><input id="li_a0"></div><div><label id="li_q1"></label><input id="li_a1"></div></div>
+      <button onclick="login()">登录</button> <button class="gray" onclick="loadCaptcha('li')">换题</button>
+      <div class="msg err" id="li_msg"></div>
+    </div>
+    <div style="flex:1"><h3>注册</h3>
+      <input id="rg_name" placeholder="用户名"><input id="rg_pass" type="password" placeholder="密码">
+      <input id="rg_email" placeholder="邮箱(必填)"><div style="display:flex;gap:6px"><input id="rg_code" placeholder="邮箱验证码"><button class="gray" onclick="sendCode()">发验证码</button></div>
+      <input id="rg_phone" placeholder="手机号(选填,仅校验格式)">
+      <div class="caps"><div><label id="rg_q0"></label><input id="rg_a0"></div><div><label id="rg_q1"></label><input id="rg_a1"></div></div>
+      <button onclick="reg()">注册</button> <button class="gray" onclick="loadCaptcha('rg')">换题</button>
+      <div class="msg err" id="rg_msg"></div>
+    </div>
+  </div>
+</div>
+<div id="mainBox" style="display:none">
+  <div class="card" id="upBox">
+    <h3>上传资料 <span id="meInfo" style="font-size:13px;color:#666"></span></h3>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="upCat" style="width:150px"></select>
+      <button class="gray" onclick="addCat()">新建分类</button>
+      <input type="file" id="upFile" style="flex:1">
+      <button onclick="upload()">上传 (≤10MB, +10积分)</button>
+    </div>
+    <div class="msg" id="upMsg"></div>
+  </div>
+  <div class="card">
+    <h3>资料列表 <select id="catFilter" onchange="loadFiles()" style="width:140px"></select></h3>
+    <table><thead><tr><th>ID</th><th>文件名</th><th>分类</th><th>大小</th><th>评分</th><th>上传者</th><th>下载</th></tr></thead>
+    <tbody id="fileList"></tbody></table>
+  </div>
+</div>
+<p style="text-align:center;color:#888;font-size:13px" id="footer"></p>
+</main>
+<div id="dlModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4)" onclick="if(event.target===this)closeModal()">
+  <div class="card" style="max-width:420px;margin:80px auto" id="dlBody"></div>
+</div>
+<script>
+let caps={},me={};
+const fmt=s=>s<1024?s+'B':s<1048576?(s/1024).toFixed(1)+'KB':(s/1048576).toFixed(2)+'MB';
+async function api(u,opt){const r=await fetch(u,Object.assign({headers:{'Content-Type':'application/json'}},opt));const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.e||r.status);return j}
+async function loadSite(){const s=await api('/api/site');document.getElementById('siteName').textContent=s.siteName;document.title=s.siteName;document.getElementById('footer').textContent=s.footer}
+async function loadCaptcha(pfx){const c=await api('/api/captcha');caps[pfx]=c;document.getElementById(pfx+'_q0').textContent=c.q[0];document.getElementById(pfx+'_q1').textContent=c.q[1]}
+async function sendCode(){try{await api('/api/sendcode',{method:'POST',body:JSON.stringify({capId:caps.rg.id,ans1:+document.getElementById('rg_a0').value,ans2:+document.getElementById('rg_a1').value,email:document.getElementById('rg_email').value})});msg('rg_msg','验证码已发送','ok');await loadCaptcha('rg')}catch(e){msg('rg_msg',e.message);await loadCaptcha('rg')}}
+async function reg(){try{const j=await api('/api/register',{method:'POST',body:JSON.stringify({capId:caps.rg.id,ans1:+document.getElementById('rg_a0').value,ans2:+document.getElementById('rg_a1').value,name:rg_name.value,pass:rg_pass.value,email:rg_email.value,phone:rg_phone.value,code:rg_code.value})});await refresh()}catch(e){msg('rg_msg',e.message);loadCaptcha('rg')}}
+async function login(){try{const j=await api('/api/login',{method:'POST',body:JSON.stringify({capId:caps.li.id,ans1:+document.getElementById('li_a0').value,ans2:+document.getElementById('li_a1').value,name:li_name.value,pass:li_pass.value})});if(j.admin)location.href='/admin.html';else await refresh()}catch(e){msg('li_msg',e.message);loadCaptcha('li')}}
+function msg(id,t,cls){const el=document.getElementById(id);el.textContent=t||'';el.className='msg '+(cls||'err')}
+async function refresh(){me=await api('/api/me').catch(()=>({}));
+if(me.name&&me.name!=='__admin'){document.getElementById('authBox').style.display='none';document.getElementById('mainBox').style.display='';
+document.getElementById('nav').innerHTML=`<span style="font-size:14px">${me.name} | ${me.points}积分</span> <button class="gray" onclick="api('/api/logout',{method:'POST'}).then(location.reload)">退出</button>`;
+document.getElementById('meInfo').textContent=`(积分:${me.points})`;await loadCats();await loadFiles()}
+else if(me.admin){location.href='/admin.html'}}
+async function loadCats(){const cats=await api('/api/cats');document.getElementById('upCat').innerHTML=cats.map(c=>`<option>${c}</option>`).join('');document.getElementById('catFilter').innerHTML='<option value="">全部分类</option>'+cats.map(c=>`<option>${c}</option>`).join('')}
+async function addCat(){const n=prompt('分类名');if(!n)return;try{await api('/api/cats',{method:'POST',body:JSON.stringify({name:n})});loadCats()}catch(e){alert(e.message)}}
+async function loadFiles(){const files=await api('/api/files'+(catFilter.value?'?cat='+encodeURIComponent(catFilter.value):''));
+document.getElementById('fileList').innerHTML=files.map(f=>`<tr><td>${f.id}</td><td>${esc(f.name)}</td><td>${esc(f.cat)}</td><td>${fmt(f.size)}</td><td>${f.rate||'-'}分</td><td>${esc(f.by)}</td>
+<td><button onclick="dl(${f.id})">下载</button> <button class="gray" onclick="showRate(${f.id},'${esc(f.name)}')">评价</button></td></tr>`).join('')||'<tr><td colspan="7">暂无资料</td></tr>'}
+function esc(s){return String(s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}
+async function upload(){const f=document.getElementById('upFile').files[0];if(!f)return msg('upMsg','请选择文件');
+if(f.size>10*1024*1024)return msg('upMsg','文件超过10MB');
+const fd=new FormData();fd.append('file',f);fd.append('cat',upCat.value);
+msg('upMsg','上传中...');
+try{const r=await fetch('/api/upload',{method:'POST',body:fd});const j=await r.json();if(!r.ok)throw new Error(j.e);msg('upMsg','上传成功 ID:'+j.id,'ok');loadFiles();refresh()}catch(e){msg('upMsg',e.message)}}
+async function dl(id){const o=await api('/api/download/'+id);
+document.getElementById('dlBody').innerHTML=`<h3>下载方式</h3><dl>
+<dt><b>GitHub直连</b></dt><dd><a href="${o.github}" target="_blank">从GitHub下载</a><br><small class="err">提示：由于网络原因可能无法访问或速度很慢</small></dd>
+${o.proxy?`<dt><b>服务器中转</b></dt><dd><button onclick="location.href='${o.proxy}'">中转下载</button> 消耗 ${o.proxyCost} 积分</dd>`:''}
+${o.mirror?`<dt><b>国内镜像</b></dt><dd><a href="${o.mirror}">从GitCode镜像下载</a>(快)</dd>`:''}</dl>
+<button class="gray" onclick="closeModal()">关闭</button>`;dlModal.style.display='block'}
+function closeModal(){dlModal.style.display='none'}
+async function showRate(id,name){const rs=await api('/api/rate/'+id);
+dlBody.innerHTML=`<h3>评价: ${esc(name)}</h3><div id="rbox">评分:<select id="rStars"><option>5</option><option>4</option><option>3</option><option>2</option><option>1</option></select>
+<textarea id="rText" placeholder="评价内容(可选)"></textarea><button onclick="rate(${id})">提交评价</button></div>
+<hr>${rs.map(r=>`<p><b>${esc(r.by)}</b> ${'★'.repeat(r.stars)}${'☆'.repeat(5-r.stars)}<br>${esc(r.text||'')}</p>`).join('')||'<p>暂无评价</p>'}
+<button class="gray" onclick="closeModal()">关闭</button>`;dlModal.style.display='block'}
+async function rate(id){try{await api('/api/rate/'+id,{method:'POST',body:JSON.stringify({stars:rStars.value,text:rText.value})});alert('评价成功');closeModal();loadFiles()}catch(e){alert(e.message)}}
+loadSite();loadCaptcha('li');loadCaptcha('rg');refresh();
+</script>
+</body>
+</html>

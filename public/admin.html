@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>管理后台</title>
+<style>
+*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;background:#f5f6f8;color:#222}
+header{background:#333;color:#fff;padding:12px 20px;display:flex;justify-content:space-between;align-items:center}
+main{max-width:960px;margin:20px auto;padding:0 14px}
+.card{background:#fff;border-radius:10px;padding:16px;margin-bottom:14px;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+button{background:#1a73e8;color:#fff;border:0;border-radius:6px;padding:7px 14px;cursor:pointer}
+button.gray{background:#888}button.red{background:#c00}
+input,select,textarea{padding:7px;border:1px solid #ccc;border-radius:6px;width:100%;margin:4px 0}
+label{font-size:13px;color:#555}
+.row{display:flex;gap:10px;flex-wrap:wrap}.row>div{flex:1;min-width:180px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:6px;border-bottom:1px solid #eee;text-align:left}
+.msg{font-size:13px;margin-top:6px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+.stat{background:#eef4ff;border-radius:8px;padding:10px;text-align:center}
+.stat b{display:block;font-size:22px;color:#1a73e8}
+</style>
+</head>
+<body>
+<header><h1 id="st" style="margin:0;font-size:18px">管理后台</h1><button class="gray" onclick="api('/api/logout',{method:'POST'}).then(()=>location.href='/')">退出</button></header>
+<main>
+<div class="card"><h3>数据看板</h3><div class="grid" id="stats">加载中...</div>
+<div id="advice" class="msg"></div></div>
+<div class="card"><h3>成本估计面板</h3><div id="cost" class="grid"></div><p style="font-size:13px;color:#666">预算: 每月 ≤ $0.9（留 $0.1 富余）。估算基于 Railway 用量计费（内存约$0.23/天上限 + 出口流量$0.05/GB）。</p></div>
+<div class="card"><h3>站点设置</h3>
+<div class="row"><div><label>网站名称</label><input id="s_siteName"></div><div><label>页尾备注</label><input id="s_footer"></div></div>
+<div class="row"><div><label>注册赠送积分</label><input id="s_startPoints" type="number"></div><div><label>中转每500KB扣分</label><input id="s_proxyCost" type="number"></div><div><label>上传奖励积分</label><input id="s_uploadPoints" type="number"></div></div>
+<label><input type="checkbox" id="s_proxyOff" style="width:auto"> 关闭服务器中转下载（省成本）</label>
+<button onclick="save(['siteName','footer','startPoints','proxyCost','uploadPoints','proxyOff'])">保存</button><div class="msg" id="m1"></div></div>
+<div class="card"><h3>SMTP 设置（注册验证码）</h3>
+<div class="row"><div><label>主机</label><input id="s_smtpHost"></div><div><label>端口</label><input id="s_smtpPort" type="number"></div></div>
+<div class="row"><div><label>账号</label><input id="s_smtpUser"></div><div><label>密码/授权码</label><input id="s_smtpPass" type="password"></div><div><label>发件人</label><input id="s_smtpFrom"></div></div>
+<button onclick="save(['smtpHost','smtpPort','smtpUser','smtpPass','smtpFrom'])">保存</button>
+<button class="gray" onclick="api('/api/admin/smtp-test',{method:'POST'}).then(()=>note('m2','测试邮件已发送','ok')).catch(e=>note('m2',e.message))">发送测试邮件</button><div class="msg" id="m2"></div></div>
+<div class="card"><h3>GitHub 存储（文件托管仓库）</h3>
+<div class="row"><div><label>Token(需repo权限)</label><input id="s_ghToken" type="password"></div><div><label>Owner</label><input id="s_ghOwner"></div><div><label>仓库名</label><input id="s_ghRepoName"></div></div>
+<p style="font-size:13px;color:#666">文件上传到该仓库 tag 为 files 的 Release，重命名为 上传ID.扩展名。</p>
+<button onclick="save(['ghToken','ghOwner','ghRepoName'])">保存</button><div class="msg" id="m3"></div></div>
+<div class="card"><h3>GitCode 国内镜像（每3天自动同步）</h3>
+<div class="row"><div><label>GitCode 仓库地址(https)</label><input id="s_gitcodeUrl" placeholder="https://gitcode.com/user/repo.git"></div></div>
+<button onclick="save(['gitcodeUrl'])">保存</button>
+<button class="gray" onclick="api('/api/admin/sync',{method:'POST'}).then(()=>note('m4','同步已触发','ok'))">立即同步</button>
+<span id="syncInfo" style="font-size:13px;color:#666"></span><div class="msg" id="m4"></div></div>
+</main>
+<script>
+const F=['siteName','footer','startPoints','proxyCost','uploadPoints','proxyOff','smtpHost','smtpPort','smtpUser','smtpPass','smtpFrom','ghToken','ghOwner','ghRepoName','gitcodeUrl'];
+async function api(u,opt){const r=await fetch(u,Object.assign({headers:{'Content-Type':'application/json'}},opt));const j=await r.json().catch(()=>({}));if(!r.ok){if(r.status===403||r.status===401)location.href='/';throw new Error(j.e||r.status)}return j}
+function note(id,t,cls){const el=document.getElementById(id);el.textContent=t||'';el.className='msg '+(cls||'err')}
+async function save(keys){const b={};for(const k of keys){const el=document.getElementById('s_'+k);b[k]=el.type==='checkbox'?el.checked:el.value}try{await api('/api/admin/settings',{method:'POST',body:JSON.stringify(b)});note('m1','已保存','ok')}catch(e){note('m1',e.message)}}
+async function load(){const s=await api('/api/admin/settings');for(const k of F){const el=document.getElementById('s_'+k);if(!el)continue;if(el.type==='checkbox')el.checked=!!s[k];else el.value=s[k]??''}
+const st=await api('/api/admin/stats');
+document.getElementById('stats').innerHTML=[['用户',st.users],['文件',st.files],['总下载',st.totalDownloads],['流通积分',st.totalPoints],['中转流量',(st.proxyBytes/1048576).toFixed(1)+'MB']].map(([l,v])=>`<div class="stat">${l}<b>${v}</b></div>`).join('');
+document.getElementById('advice').textContent=st.advice.join('；');
+document.getElementById('cost').innerHTML=[['本月预计',`$${st.cost.total}`],['出口流量',`$${st.cost.egressCost} (${st.cost.egressGB}GB)`],['内存',`~$${st.cost.memCost}`],['预算内?',st.cost.within?'✔ 是':'✘ 否']].map(([l,v])=>`<div class="stat">${l}<b style="font-size:15px;color:${st.cost.within?'#1a73e8':'#c00'}">${v}</b></div>`).join('');
+document.getElementById('syncInfo').textContent=st.sync.gitcodeConfigured?`上次同步: ${st.sync.lastSync?new Date(st.sync.lastSync).toLocaleString():'从未'}，下次: ${Math.ceil(st.sync.nextSyncIn/864e5)}天内`:'未配置GitCode';
+document.getElementById('st').textContent='管理后台 - '+s.siteName}
+load();
+</script>
+</body>
+</html>
