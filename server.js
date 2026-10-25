@@ -1,7 +1,6 @@
 // 轻量试卷资料共享站 - 单文件服务端 (数据: Redis 或 TiDB, 文件: GitHub/GitCode Release)
 const express = require('express');
 const multer = require('multer');
-const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const path = require('path');
 const { execFile } = require('child_process');
@@ -50,7 +49,8 @@ const DEF_SETTINGS = {
   smtpHost: '', smtpPort: 465, smtpUser: '', smtpPass: '', smtpFrom: '',
   ghToken: '', ghOwner: '', ghRepoName: '',
   gitcodeUrl: '', lastSync: 0, proxyOff: false,
-  startPoints: 20, proxyCost: 3, uploadPoints: 10, maxFileMB: 10
+  startPoints: 20, proxyCost: 3, uploadPoints: 10, maxFileMB: 10,
+  captchaTime: 1200 // 验证码响应时间阈值(毫秒)
 };
 async function getSettings() { return Object.assign({}, DEF_SETTINGS, (await kvGet('settings')) || {}); }
 async function setSettings(patch) {
@@ -78,20 +78,18 @@ function adminOnly(req, res, next) { if (getUser(req) !== '__admin') return res.
 const captchas = {};
 setInterval(() => { for (const k in captchas) if (Date.now() - captchas[k].t > 6e5) delete captchas[k]; }, 3e5);
 function newCaptcha() {
-  const r = () => Math.floor(Math.random() * 101);
+  const r = () => Math.floor(Math.random() * 51); // 0-50，避免大数
   const a = r(), b = r(), c = r(), d = r();
-  const o1 = Math.random() < .5, o2 = Math.random() < .5;
   const id = crypto.randomUUID();
-  captchas[id] = { a, b, c, d, o1, o2, t: Date.now() };
-  return { id, q: [`${a} ${o1 ? '+' : '-'} ${b} = ?`, `${c} ${o2 ? '+' : '-'} ${d} = ?`] };
+  captchas[id] = { a, b, c, d, t: Date.now() };
+  return { id, q: [`${a} + ${b} = ?`, `${c} + ${d} = ?`] };
 }
 function checkCaptcha(body) {
   const c = captchas[body.capId]; if (!c) return '验证码已过期，请刷新';
-  const ans = (x, y, p) => (p ? x + y : x - y);
   const a1 = parseInt(body.ans1), a2 = parseInt(body.ans2);
   if (isNaN(a1) || isNaN(a2)) { delete captchas[body.capId]; return '答案必须为数字'; }
-  if (a1 !== ans(c.a, c.b, c.o1) || a2 !== ans(c.c, c.d, c.o2)) { delete captchas[body.capId]; return '算术题答案错误'; }
-  if (Date.now() - c.t < 1200) { delete captchas[body.capId]; return '回答过快，判定为机器人，请求已驳回'; }
+  if (a1 !== c.a + c.b || a2 !== c.c + c.d) { delete captchas[body.capId]; return '算术题答案错误'; }
+  if (Date.now() - c.t < (await getSettings()).captchaTime) { delete captchas[body.capId]; return '回答过快，判定为机器人，请求已驳回'; }
   delete captchas[body.capId]; return null;
 }
 const phoneRe = /^1[3-9]\d{9}$/;

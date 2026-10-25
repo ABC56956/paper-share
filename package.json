@@ -2,7 +2,7 @@
   "name": "paper-share",
   "version": "1.0.0",
   "private": true,
-  "scripts": { "start": "node --max-old-space-size=96 server.js" },
+  "scripts": { "start": "node --max-old-space-size=48 server.js" },
   "engines": { "node": ">=20" },
   "dependencies": {
     "express": "^4.19.2",
