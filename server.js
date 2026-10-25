@@ -5,8 +5,8 @@ const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const path = require('path');
 const { execFile } = require('child_process');
+const { Readable } = require('stream');
 const Redis = require('ioredis');
-const mysql = require('mysql2/promise');
 
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
 const ADMIN_PASS = process.env.ADMIN_PASS || 'admin123';
@@ -22,6 +22,7 @@ async function dbInit(b) {
     if (!redis) redis = new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: 2 });
   } else {
     if (!mysqldb) {
+      const mysql = require('mysql2/promise'); // 按需加载，降低常驻内存
       mysqldb = await mysql.createConnection(process.env.TIDB_URL);
       await mysqldb.query('CREATE TABLE IF NOT EXISTS kv (k VARCHAR(191) PRIMARY KEY, v JSON)');
     }
@@ -263,7 +264,7 @@ app.get('/api/download/:id', async (req, res) => {
   });
 });
 
-// 中转下载(扣积分)
+// 中转下载(扣积分, 流式转发不缓冲整个文件, 省内存)
 app.get('/api/download/proxy/:id', auth, async (req, res) => {
   const u = await getUserDoc(req.user);
   const f = await kvGet('file:' + req.params.id); if (!f) return res.status(404).json({ e: '文件不存在' });
@@ -273,13 +274,13 @@ app.get('/api/download/proxy/:id', auth, async (req, res) => {
   if (u.points < cost) return res.status(400).json({ e: `积分不足，需要${cost}分，当前${u.points}分` });
   const r = await fetch(await ghDownloadUrl(f), { redirect: 'follow' });
   if (!r.ok) return res.status(502).json({ e: 'GitHub取文件失败 HTTP ' + r.status });
-  const buf = Buffer.from(await r.arrayBuffer());
   u.points -= cost; await saveUserDoc(u);
   f.downloads = (f.downloads || 0) + 1; await kvSet('file:' + f.id, f);
-  await kvSet('stat:proxyBytes', ((await kvGet('stat:proxyBytes')) || 0) + buf.length);
+  await kvSet('stat:proxyBytes', ((await kvGet('stat:proxyBytes')) || 0) + (f.size || 0));
   res.setHeader('Content-Type', 'application/octet-stream');
   res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(f.name)}`);
-  res.send(buf);
+  if (r.headers.get('content-length')) res.setHeader('Content-Length', r.headers.get('content-length'));
+  Readable.fromWeb(r.body).pipe(res);
 });
 
 // 镜像下载(302跳转 GitCode)
@@ -325,8 +326,9 @@ app.post('/api/admin/smtp-test', adminOnly, async (req, res) => {
   catch (e) { res.status(500).json({ e: e.message }); }
 });
 
-// 数据看板 + 成本估计
+// 数据看板 + 成本估计 (目标: ≤$0.03/天, 即 ≤$0.90/月, 预算$1留$0.1富余)
 function daysInMonth() { return new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate(); }
+const DAILY_BUDGET = 0.03, MEM_PRICE = 10; // $/GB/月
 app.get('/api/admin/stats', adminOnly, async (req, res) => {
   const files = await allFiles();
   const uidx = (await kvGet('useridx')) || [];
@@ -335,19 +337,33 @@ app.get('/api/admin/stats', adminOnly, async (req, res) => {
   let totalDownloads = 0; for (const f of files) totalDownloads += f.downloads || 0;
   const proxyBytes = (await kvGet('stat:proxyBytes')) || 0;
   const s = await getSettings();
-  // Railway 计费估算: 出口流量 ~$0.05/GB；内存512MB ≈ $0.23/天上限（实际按使用计费更低）
-  const egressCost = +(proxyBytes / 1073741824 * 0.05).toFixed(3);
-  const memCost = +(0.23 * daysInMonth()).toFixed(2);
-  const total = +(egressCost + memCost).toFixed(2);
+  // Railway 计费: 内存 $10/GB/月 (按实际GB用量), 出口流量 $0.05/GB
+  const rssGB = process.memoryUsage().rss / 1073741824;
+  const dayRatio = new Date().getDate() / daysInMonth();
+  const memCostMonth = +(rssGB * MEM_PRICE).toFixed(2);           // 按当前内存推算整月
+  const egressCostMonth = +(proxyBytes / 1073741824 * 0.05 / (dayRatio || 1)).toFixed(2); // 按已过天数折算整月
+  const memDaily = +(memCostMonth / daysInMonth()).toFixed(3);
+  const egressDaily = +(egressCostMonth / daysInMonth()).toFixed(3);
+  const totalDaily = +(memDaily + egressDaily).toFixed(3);
+  const totalMonth = +(memCostMonth + egressCostMonth).toFixed(2);
   const advice = [];
-  if (total > 0.9) advice.push('⚠ 预计超出 $0.9 预算：建议关闭服务器中转下载，或提高中转积分单价');
-  else if (total > 0.5) advice.push('接近预算：建议引导用户走 GitHub 直连 / GitCode 镜像，减少中转');
+  if (totalDaily > DAILY_BUDGET) advice.push(`⚠ 日均 $${totalDaily} 超出 $0.03 预算：建议关闭中转下载，或提高中转积分单价`);
+  else if (totalDaily > DAILY_BUDGET * 0.7) advice.push('接近日预算：引导用户走 GitHub 直连 / GitCode 镜像');
   else advice.push('成本正常');
-  if (proxyBytes > 3 * 1073741824) advice.push('中转流量较大，可考虑临时关闭中转下载');
+  if (rssGB > 0.085) advice.push('内存偏高：建议 Railway 设置内存上限 128MB，或重启服务');
+  const egressAllowGB = +(((DAILY_BUDGET * daysInMonth()) - memCostMonth) / 0.05).toFixed(2);
+  if (egressAllowGB <= 0) advice.push('内存费用已占满预算，必须缩减内存或升级预算');
+  else advice.push(`本月剩余可中转流量约 ${Math.max(0, egressAllowGB - proxyBytes / 1073741824).toFixed(2)} GB`);
   res.json({
     users: uidx.length, files: files.length, totalDownloads, totalPoints, proxyBytes,
+    rssMB: +(rssGB * 1024).toFixed(1),
     sync: { gitcodeConfigured: !!s.gitcodeUrl, lastSync: s.lastSync, nextSyncIn: Math.max(0, 3 * 864e5 - (Date.now() - s.lastSync)) },
-    cost: { egressGB: +(proxyBytes / 1073741824).toFixed(4), egressCost, memCost, total, budget: 0.9, within: total <= 0.9 },
+    cost: {
+      dailyBudget: DAILY_BUDGET, memDaily, egressDaily, totalDaily,
+      memMonth: memCostMonth, egressMonth: egressCostMonth, totalMonth,
+      egressGB: +(proxyBytes / 1073741824).toFixed(4), egressAllowGB: Math.max(0, egressAllowGB),
+      within: totalDaily <= DAILY_BUDGET
+    },
     advice
   });
 });

@@ -26,7 +26,7 @@ th,td{padding:6px;border-bottom:1px solid #eee;text-align:left}
 <main>
 <div class="card"><h3>数据看板</h3><div class="grid" id="stats">加载中...</div>
 <div id="advice" class="msg"></div></div>
-<div class="card"><h3>成本估计面板</h3><div id="cost" class="grid"></div><p style="font-size:13px;color:#666">预算: 每月 ≤ $0.9（留 $0.1 富余）。估算基于 Railway 用量计费（内存约$0.23/天上限 + 出口流量$0.05/GB）。</p></div>
+<div class="card"><h3>成本估计面板</h3><div id="cost" class="grid"></div><p style="font-size:13px;color:#666">预算: ≤ $0.03/天（$0.90/月，$1 预算留 $0.1 富余）。内存按 Railway $10/GB/月 实际用量计费，出口流量 $0.05/GB。建议 Railway 内存上限 128MB。</p></div>
 <div class="card"><h3>站点设置</h3>
 <div class="row"><div><label>网站名称</label><input id="s_siteName"></div><div><label>页尾备注</label><input id="s_footer"></div></div>
 <div class="row"><div><label>注册赠送积分</label><input id="s_startPoints" type="number"></div><div><label>中转每500KB扣分</label><input id="s_proxyCost" type="number"></div><div><label>上传奖励积分</label><input id="s_uploadPoints" type="number"></div></div>
@@ -56,7 +56,7 @@ async function load(){const s=await api('/api/admin/settings');for(const k of F)
 const st=await api('/api/admin/stats');
 document.getElementById('stats').innerHTML=[['用户',st.users],['文件',st.files],['总下载',st.totalDownloads],['流通积分',st.totalPoints],['中转流量',(st.proxyBytes/1048576).toFixed(1)+'MB']].map(([l,v])=>`<div class="stat">${l}<b>${v}</b></div>`).join('');
 document.getElementById('advice').textContent=st.advice.join('；');
-document.getElementById('cost').innerHTML=[['本月预计',`$${st.cost.total}`],['出口流量',`$${st.cost.egressCost} (${st.cost.egressGB}GB)`],['内存',`~$${st.cost.memCost}`],['预算内?',st.cost.within?'✔ 是':'✘ 否']].map(([l,v])=>`<div class="stat">${l}<b style="font-size:15px;color:${st.cost.within?'#1a73e8':'#c00'}">${v}</b></div>`).join('');
+document.getElementById('cost').innerHTML=[['日均成本',`$${st.cost.totalDaily}`],['内存/日',`$${st.cost.memDaily}`],['流量/日',`$${st.cost.egressDaily}`],['月预计',`$${st.cost.totalMonth}`],['当前内存',`${st.rssMB}MB`],['剩余流量',`${st.cost.egressAllowGB}GB`]].map(([l,v])=>`<div class="stat">${l}<b style="font-size:15px;color:${st.cost.within?'#1a73e8':'#c00'}">${v}</b></div>`).join('');
 document.getElementById('syncInfo').textContent=st.sync.gitcodeConfigured?`上次同步: ${st.sync.lastSync?new Date(st.sync.lastSync).toLocaleString():'从未'}，下次: ${Math.ceil(st.sync.nextSyncIn/864e5)}天内`:'未配置GitCode';
 document.getElementById('st').textContent='管理后台 - '+s.siteName}
 load();
