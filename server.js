@@ -1,6 +1,7 @@
 // 轻量试卷资料共享站 - 单文件服务端 (数据: Redis 或 TiDB, 文件: GitHub/GitCode Release)
 const express = require('express');
 const multer = require('multer');
+const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const path = require('path');
 const { execFile } = require('child_process');
