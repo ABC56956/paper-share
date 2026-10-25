@@ -65,7 +65,11 @@ function checkToken(t) {
   const p = t.slice(0, i); if (sign(p) !== t.slice(i + 1)) return null;
   const [u, ts] = p.split('.'); if (Date.now() - +ts > 30 * 864e5) return null; return u;
 }
-function getUser(req) { return checkToken((req.headers.cookie || '').match(/sess=([^;]+)/)?.[1]); }
+function getUser(req) {
+  const match = (req.headers.cookie || '').match(/sess=([^;]+)/);
+  if (!match) return null;
+  return checkToken(match[1]);
+}
 function auth(req, res, next) { const u = getUser(req); if (!u || u === '__admin') return res.status(401).json({ e: '未登录' }); req.user = u; next(); }
 function adminOnly(req, res, next) { if (getUser(req) !== '__admin') return res.status(403).json({ e: '需要管理员' }); next(); }
 
@@ -83,7 +87,9 @@ function newCaptcha() {
 function checkCaptcha(body) {
   const c = captchas[body.capId]; if (!c) return '验证码已过期，请刷新';
   const ans = (x, y, p) => (p ? x + y : x - y);
-  if (+body.ans1 !== ans(c.a, c.b, c.o1) || +body.ans2 !== ans(c.c, c.d, c.o2)) { delete captchas[body.capId]; return '算术题答案错误'; }
+  const a1 = parseInt(body.ans1), a2 = parseInt(body.ans2);
+  if (isNaN(a1) || isNaN(a2)) { delete captchas[body.capId]; return '答案必须为数字'; }
+  if (a1 !== ans(c.a, c.b, c.o1) || a2 !== ans(c.c, c.d, c.o2)) { delete captchas[body.capId]; return '算术题答案错误'; }
   if (Date.now() - c.t < 1200) { delete captchas[body.capId]; return '回答过快，判定为机器人，请求已驳回'; }
   delete captchas[body.capId]; return null;
 }
@@ -110,7 +116,7 @@ async function ghUpload(name, buf, ct) {
   const s = await getSettings();
   const url = rel.upload_url.split('{')[0] + `?name=${encodeURIComponent(name)}`;
   const r = await fetch(url, { method: 'POST', headers: Object.assign(await ghHeaders(), { 'Content-Type': ct, 'Content-Length': buf.length }), body: buf });
-  if (!r.ok) throw new Error('GitHub上传失败 HTTP ' + r.status);
+  if (!r.ok) throw new Error('上传失败');
   return r.json();
 }
 async function ghDownloadUrl(f) {
@@ -146,7 +152,7 @@ app.post('/api/sendcode', async (req, res) => {
   const code = String(Math.floor(1e5 + Math.random() * 9e5));
   await kvSet('mailcode:' + email, { code, t: Date.now() });
   try { await sendMail(s, email, code); res.json({ ok: 1 }); }
-  catch (err) { res.status(500).json({ e: '邮件发送失败: ' + err.message }); }
+  catch (err) { res.status(500).json({ e: '邮件发送失败' }); }
 });
 
 app.post('/api/register', async (req, res) => {
@@ -238,7 +244,7 @@ app.post('/api/upload', auth, upload.single('file'), async (req, res) => {
     res.json({ ok: 1, id, points: u.points });
   } catch (err) {
     await kvSet('counter:file', id - 1);
-    res.status(500).json({ e: '上传GitHub失败: ' + (err.message || err) });
+    res.status(500).json({ e: '上传失败' });
   }
 });
 
@@ -350,14 +356,16 @@ app.get('/api/admin/stats', adminOnly, async (req, res) => {
 app.post('/api/admin/sync', adminOnly, (req, res) => { syncGitcode(); res.json({ ok: 1 }); });
 
 // GitCode 每3天镜像同步 (git push --mirror)
+const fs = require('fs');
+const os = require('os');
+const MIRROR_DIR = path.join(os.tmpdir(), 'mirror.git');
 function syncGitcode() {
   getSettings().then(s => {
     if (!s.gitcodeUrl || !s.ghToken) return;
-    const dir = '/tmp/opencode/mirror.git';
-    execFile('rm', ['-rf', dir], () => {
-      execFile('git', ['clone', '--mirror', `https://${s.ghToken}@github.com/${s.ghOwner}/${s.ghRepoName}.git`, dir], err => {
+    execFile('rm', ['-rf', MIRROR_DIR], () => {
+      execFile('git', ['clone', '--mirror', `https://${s.ghToken}@github.com/${s.ghOwner}/${s.ghRepoName}.git`, MIRROR_DIR], err => {
         if (err) return console.error('gitcode sync clone fail:', err.message);
-        execFile('git', ['push', '--mirror', s.gitcodeUrl], { cwd: dir }, err2 => {
+        execFile('git', ['push', '--mirror', s.gitcodeUrl], { cwd: MIRROR_DIR }, err2 => {
           if (err2) return console.error('gitcode sync push fail:', err2.message);
           setSettings({ lastSync: Date.now() }).then(() => console.log('gitcode synced'));
         });
@@ -372,8 +380,11 @@ if (process.env.GITCODE_SYNC !== 'off') {
 
 // ---------- 启动 ----------
 (async () => {
-  const s0 = await getSettings().catch(() => DEF_SETTINGS);
-  await dbInit(s0.backend);
+  // 先用环境变量选择后端并初始化连接，再读取数据库中的设置
+  await dbInit(process.env.BACKEND || 'redis');
+  const s0 = await getSettings();
+  // 若数据库中配置的后端与环境不同，切换后端
+  if (s0.backend !== (process.env.BACKEND || 'redis')) await dbInit(s0.backend);
   if (!(await kvGet('cats'))) await kvSet('cats', ['默认']);
   app.listen(PORT, () => console.log('listening on ' + PORT));
-})().catch(e => { console.error(e); process.exit(1); });
+})().catch(e => { console.error('startup failed:', e); process.exit(1); });
